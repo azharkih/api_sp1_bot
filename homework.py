@@ -81,7 +81,7 @@ def main() -> None:
     """
     logger.debug('Запуск бота')
     bot_client = telegram.Bot(token=TELEGRAM_TOKEN)
-    current_timestamp = int(time.time()) - 300000
+    current_timestamp = int(time.time())
 
     while True:
         try:
