@@ -1,13 +1,15 @@
 import logging
 import os
 import time
+from json import JSONDecodeError
+from pprint import pprint
 
 import requests
 import telegram
 from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.DEBUG, filename='telegram_bot.log',
-                    format='%(asctime)s %(name)s %(levelname)s:%(message)s')
+                    format='%(asctime)s %(name)s %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -15,6 +17,15 @@ load_dotenv()
 PRAKTIKUM_TOKEN = os.getenv("PRAKTIKUM_TOKEN")
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+
+HOMEWORK_STATUSES = {'reviewing': 'Работа взята в ревью!',
+                     'rejected': 'К сожалению в работе нашлись ошибки.',
+                     'approved': 'Ревьюеру всё понравилось, можно приступать к '
+                                 'следующему уроку.'}
+
+
+class WrongContentException(Exception):
+    pass
 
 
 def parse_homework_status(homework: dict) -> str:
@@ -27,14 +38,17 @@ def parse_homework_status(homework: dict) -> str:
         Словарь с атрибутами домашней работы.
     """
     homework_name = homework.get('homework_name')
-    if homework.get('status') == 'reviewing':
-        return f'Работа "{homework_name}" взята в ревью!'
-    if homework.get('status') == 'rejected':
-        verdict = 'К сожалению в работе нашлись ошибки.'
+    status = homework.get('status')
+    if not (homework_name and status):
+        logger.error('Не удалось получить один из атрибутов домашней работы')
+        raise WrongContentException()
+    title = f'У вас проверили работу "{homework_name}"!\n\n'
+    # title = f'Статус вашей домашней работы "{homework_name}" был изменен!\n\n'
+    if status in HOMEWORK_STATUSES:
+        return title + HOMEWORK_STATUSES[status]
     else:
-        verdict = ('Ревьюеру всё понравилось, можно приступать к следующему '
-                   'уроку.')
-    return f'У вас проверили работу "{homework_name}"!\n\n{verdict}'
+        logger.warning(f'Работа получила неожиданный статус {status}')
+        return title + f'Статус работы: {status}'
 
 
 def get_homework_statuses(current_timestamp: int) -> dict:
@@ -53,11 +67,14 @@ def get_homework_statuses(current_timestamp: int) -> dict:
     data = {
         'from_date': current_timestamp
     }
-    homework_statuses = requests.get(
-        'https://praktikum.yandex.ru/api/user_api/homework_statuses/',
-        headers=headers,
-        params=data)
-    return homework_statuses.json()
+    try:
+        homework_statuses = requests.get(
+            'https://praktikum.yandex.ru/api/user_api/homework_statuses/',
+            headers=headers,
+            params=data)
+        return homework_statuses.json()
+    except JSONDecodeError:
+        logger.error('Сервис не доступен')
 
 
 def send_message(message: str, bot_client: telegram.Bot) -> telegram.Message:
@@ -86,16 +103,16 @@ def main() -> None:
     while True:
         try:
             new_homework = get_homework_statuses(current_timestamp)
-            if new_homework.get('homeworks'):
+            homeworks = new_homework.get('homeworks')
+            if homeworks:
                 send_message(parse_homework_status(
-                    new_homework.get('homeworks')[0]), bot_client)
+                    homeworks[0]), bot_client)
                 logger.info('Отправлено сообщение')
             current_timestamp = new_homework.get('current_date',
                                                  current_timestamp)
             time.sleep(300)
 
         except Exception as e:
-            print(f'Бот столкнулся с ошибкой: {e}')
             logger.error(e, exc_info=True)
             time.sleep(5)
 
